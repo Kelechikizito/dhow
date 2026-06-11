@@ -19,6 +19,11 @@ export type SettlementStatus =
 
 export type ProofStatus = "awaiting" | "attested" | "failed";
 
+/** On-chain write lifecycle for a corridor's settlement action. In sim mode a
+ *  write always confirms; "failed" is reached only when the settlement request
+ *  itself can't be reached, and a failed write never counts toward the score. */
+export type TxState = "pending" | "confirmed" | "failed";
+
 export interface Counterparty {
   id: string;
   name: string;
@@ -44,6 +49,7 @@ export interface Corridor {
   settledAt?: number;
   txHash?: string; // real Amoy tx hash when wired, synthetic when simulated
   explorerUrl?: string; // polygonscan link when on-chain
+  txState?: TxState; // settlement write lifecycle
 }
 
 export interface Importer {
@@ -101,7 +107,10 @@ export function scoreCorridors(
   corridors: Corridor[],
   now: number = Date.now(),
 ): CorridorScore {
-  const settled = corridors.filter((c) => c.status === "settled");
+  // A settlement whose on-chain write failed is not creditworthy evidence.
+  const settled = corridors.filter(
+    (c) => c.status === "settled" && c.txState !== "failed",
+  );
   const settledCount = settled.length;
   const trailingValueAed = settled.reduce((s, c) => s + c.amountAed, 0);
   const avgCorridorAed = settledCount ? trailingValueAed / settledCount : 0;

@@ -10,9 +10,16 @@ Built for **The Smart Commerce Infrastructure Challenge** (Polygon × DIFC × Ig
 
 ## The loop
 
-1. **Pay the supplier** — open settlement, or a Proof-Lock that escrows on-chain and releases automatically when shipment proof is attested.
+1. **Pay the supplier** — open settlement, or a Proof-Lock that escrows on-chain and releases automatically when shipment proof is attested. A disputed Proof-Lock refunds the buyer and counts against proof performance.
 2. **The record writes itself** — each settled corridor lifts the Corridor Score, a transparent function of settled volume, proof performance and cadence.
 3. **Capital unlocks** — cross the threshold and a working-capital offer derives from the settled history. The financier (Creek Capital) carries the risk; Dhow is a marketplace, not a balance-sheet lender.
+
+## Two ways in
+
+- **Start free** — real onboarding: sign in with a work email, name your business, add a supplier, connect a wallet, then create your own payments. Each account is its own workspace, persisted locally.
+- **Explore with sample data** — one click into a pre-seeded importer (Al Noor Trading) mid-flywheel, to see the whole loop without signing up.
+
+> Identity, persistence and settlement run on simulated infrastructure (localStorage + an env-gated chain layer) so anyone can use it end-to-end today. The seams are built so a real auth provider (Privy), a database, and on-chain settlement swap in without changing the surfaces.
 
 ## Architecture
 
@@ -20,11 +27,11 @@ The app is a thin, legible client over a pure scoring engine and an env-gated ch
 
 | Layer | File | Role |
 | --- | --- | --- |
-| Scoring engine | `lib/corridor.ts` | Pure, chain-agnostic. Corridor Score + advance sizing as transparent functions of settled corridors. |
-| Seed / fixtures | `lib/seed.ts` | Importer, financier, supplier, and the starting ledger. |
-| State seam | `components/CorridorProvider.tsx` | Client store + actions (`send` / `attest` / `acceptOffer`). Calls the chain route, optimistically updates, then patches the real tx hash. Session-persisted so a refresh keeps the walked state. **This is where a real backend plugs in.** |
-| Chain layer | `app/api/chain/route.ts`, `lib/chain.ts` | Server-only viem signer. `POST` an action → real Polygon tx hash, or a simulated hash when no chain env is configured (the demo always runs). |
-| Surfaces | `app/(app)/{send,corridor,capital}` | Send · Corridor Record · Capital. |
+| Scoring engine | `lib/corridor.ts` | Pure, chain-agnostic. Corridor Score + advance sizing as transparent functions of settled corridors. A failed on-chain write never counts. |
+| Account layer | `lib/account.ts` | Per-user identity, business profile, suppliers, wallet, and the sample workspace — persisted per account. **Where Privy + a database swap in.** |
+| State seam | `components/CorridorProvider.tsx` | One workspace store exposing `useAccount` (auth/business/suppliers/wallet) and `useCorridor` (corridors/score + `sendPayment` / `attest` / `refund` / `retry`). Optimistic update, then patches the real tx hash; persisted per account. |
+| Chain layer | `app/api/chain/route.ts`, `lib/chain.ts` | Server-only viem signer. `POST` an action (`pay`/`lock`/`attest`/`refund`) → real Polygon tx hash, or a simulated hash when no chain env is configured (it always runs). |
+| Surfaces | `app/onboarding`, `app/(app)/{send,corridor,capital}` | Onboarding · Send · Corridor Record · Capital, gated behind a real account. |
 
 Design language: light, operator-grade trade-ledger. Tokens in `app/globals.css` (chart-paper, indigo ink, verdigris teal for settle/trust, brass for value moments). Spectral display serif + Geist Sans + Geist Mono with tabular figures.
 

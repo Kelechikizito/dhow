@@ -1,5 +1,5 @@
-import Link from "next/link";
 import { DhowMark } from "@/components/DhowMark";
+import { LandingCta, LandingHeaderCta } from "@/components/LandingCta";
 
 export default function Home() {
   return (
@@ -12,12 +12,7 @@ export default function Home() {
             Dhow
           </span>
         </div>
-        <Link
-          href="/send"
-          className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper transition-colors hover:bg-ink-2"
-        >
-          Open the demo
-        </Link>
+        <LandingHeaderCta />
       </header>
 
       {/* hero */}
@@ -39,17 +34,11 @@ export default function Home() {
           We don&apos;t ask anyone to digitise trade. We pay their suppliers,
           and the ledger falls out.
         </p>
-        <div className="mt-8 flex flex-wrap items-center gap-3">
-          <Link
-            href="/send"
-            className="rounded-full bg-teal px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-teal-deep"
-          >
-            Walk the 90-second flow →
-          </Link>
-          <span className="text-sm text-ink-faint">
-            Pay → settle → score → capital, in one screen.
-          </span>
-        </div>
+        <LandingCta />
+        <p className="mt-3 text-sm text-ink-faint">
+          Pay → settle → score → capital. Sign up, or explore with sample data
+          first.
+        </p>
       </section>
 
       {/* the loop */}

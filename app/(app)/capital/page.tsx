@@ -5,7 +5,7 @@ import { useCorridor } from "@/components/CorridorProvider";
 import { aed, ELIGIBLE_THRESHOLD } from "@/lib/corridor";
 
 export default function CapitalPage() {
-  const { score, offerAed, offerAccepted, acceptOffer, financier, importer } =
+  const { score, offerAed, offerAccepted, acceptOffer, financier, business } =
     useCorridor();
 
   if (!score.eligible) {
@@ -75,10 +75,10 @@ export default function CapitalPage() {
                 <CheckIcon />
                 <div>
                   <p className="font-medium text-teal-deep">
-                    {aed(offerAed)} disbursed to {importer.name}
+                    {aed(offerAed)} disbursed to {business?.name}
                   </p>
                   <p className="text-sm text-ink-3">
-                    Settled on Polygon · repays from corridor DHW-0412
+                    Settled on Polygon · repays from your next settlement
                   </p>
                 </div>
               </div>
@@ -105,9 +105,9 @@ export default function CapitalPage() {
         <div className="mt-6 rounded-[var(--radius-card)] border border-line bg-surface p-6">
           <div className="flex items-center justify-between border-b border-line pb-4">
             <div>
-              <p className="font-medium">{importer.name}</p>
+              <p className="font-medium">{business?.name}</p>
               <p className="text-sm text-ink-3">
-                {importer.city}, {importer.country}
+                {business?.city}, {business?.country}
               </p>
             </div>
             <div className="text-right">
@@ -140,9 +140,9 @@ export default function CapitalPage() {
 
           <p className="border-t border-line pt-4 text-sm text-ink-2">
             Every figure here is a payment Dhow settled and verified on-chain.
-            Creek Capital underwrites the cashflow it can see, not an
-            attestation it has to trust. The feed stays live only while Al Noor
-            keeps settling on Dhow.
+            {" "}{financier.name} underwrites the cashflow it can see, not an
+            attestation it has to trust. The feed stays live only while{" "}
+            {business?.name} keeps settling on Dhow.
           </p>
         </div>
       </section>

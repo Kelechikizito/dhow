@@ -13,50 +13,74 @@ import {
   advanceOffer,
   Corridor,
   CorridorScore,
+  makeCorridorUsdc,
   scoreCorridors,
+  SettlementMode,
 } from "@/lib/corridor";
 import {
-  demoDraft,
-  FINANCIER,
-  IMPORTER,
-  initialCorridors,
-} from "@/lib/seed";
+  AccountRecord,
+  Business,
+  clearSampleAccount,
+  createAccount,
+  findAccountByEmail,
+  isSampleId,
+  loadAccount,
+  loadSampleAccount,
+  loadSession,
+  SAMPLE_ACCOUNT_ID,
+  saveAccount,
+  saveSession,
+  Supplier,
+  walletStub,
+} from "@/lib/account";
+import { FINANCIER } from "@/lib/seed";
 
-interface CorridorState {
-  importer: typeof IMPORTER;
+interface WorkspaceState {
+  hydrated: boolean;
+
+  // account
+  business: Business | null;
+  suppliers: Supplier[];
   financier: typeof FINANCIER;
+  isSample: boolean;
+  isAuthenticated: boolean;
+  isOnboarded: boolean;
+
+  // account actions
+  signIn: (email: string) => { onboarded: boolean };
+  saveBusiness: (b: { name: string; city: string; country: string }) => void;
+  addSupplier: (s: { name: string; city: string; country: string }) => Supplier;
+  connectWallet: (address?: string) => void;
+  signOut: () => void;
+  enterSample: () => void;
+
+  // corridors
   corridors: Corridor[];
   score: CorridorScore;
-  prevScore: number; // score before the last settlement, for the tick-up animation
+  prevScore: number;
   offerAed: number;
   offerAccepted: boolean;
-  draft: Corridor;
-  // actions
-  send: (c: Corridor) => void;
+
+  // corridor actions
+  sendPayment: (input: {
+    supplierId: string;
+    goods: string;
+    amountAed: number;
+    mode: SettlementMode;
+  }) => Corridor | null;
   attest: (id: string) => void;
+  refund: (id: string) => void;
+  retry: (id: string) => void;
   acceptOffer: () => void;
-  reset: () => void;
 }
 
-const Ctx = createContext<CorridorState | null>(null);
+const Ctx = createContext<WorkspaceState | null>(null);
 
-/* Session-scoped persistence so a refresh or a deep-link mid-flow keeps the
- * walked state instead of snapping back to seed. Cleared on Reset and when the
- * tab closes. This is demo-resilience only; the chain/server seams are unchanged. */
-const STORE_KEY = "dhow.corridor.v1";
+type ChainAction = "pay" | "lock" | "attest" | "refund";
 
-interface PersistShape {
-  corridors: Corridor[];
-  draft: Corridor;
-  offerAccepted: boolean;
-  prevScore: number;
-}
-
-type ChainAction = "pay" | "lock" | "attest";
-
-/** Calls the server chain route. Returns a real tx hash on-chain, or a
- *  simulated one when the chain isn't configured. Never throws — the demo
- *  must keep moving. */
+/** Calls the server chain route. Resolves to a tx hash (real on-chain, or a
+ *  simulated one when unconfigured). A missing hash means the settlement request
+ *  itself failed — the caller surfaces that as a failed write the user can retry. */
 async function postChain(
   action: ChainAction,
   ref: string,
@@ -68,6 +92,7 @@ async function postChain(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action, ref, amountUsdc }),
     });
+    if (!res.ok) return {};
     const data = await res.json();
     return { txHash: data.txHash, explorerUrl: data.explorerUrl ?? undefined };
   } catch {
@@ -75,53 +100,69 @@ async function postChain(
   }
 }
 
+function nextRef(corridors: Corridor[]): string {
+  const nums = corridors
+    .map((c) => parseInt(c.ref.replace(/\D/g, ""), 10))
+    .filter((n) => !Number.isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 400;
+  return `DHW-${String(max + 1).padStart(4, "0")}`;
+}
+
+function newSupplierId(): string {
+  try {
+    return `sup_${crypto.randomUUID().slice(0, 8)}`;
+  } catch {
+    return `sup_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 export function CorridorProvider({ children }: { children: React.ReactNode }) {
   const [now] = useState(() => Date.now());
-  const [corridors, setCorridors] = useState<Corridor[]>(() =>
-    initialCorridors(now),
-  );
-  const [draft, setDraft] = useState<Corridor>(() => demoDraft(now));
-  const [prevScore, setPrevScore] = useState<number>(
-    () => scoreCorridors(initialCorridors(now), now).score,
-  );
-  const [offerAccepted, setOfferAccepted] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
-  // keep a ref in sync so actions can read the latest pre-mutation corridors
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [business, setBusiness] = useState<Business | null>(null);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [corridors, setCorridors] = useState<Corridor[]>([]);
+  const [offerAccepted, setOfferAccepted] = useState(false);
+  const [prevScore, setPrevScore] = useState(0);
+
   const corridorsRef = useRef<Corridor[]>(corridors);
   corridorsRef.current = corridors;
 
-  // Rehydrate once from sessionStorage. Runs after the first paint so server and
-  // client first-render both use seed (no hydration mismatch); `hydrated` then
-  // gates the persist effect below so it never clobbers stored state with seed.
-  const [hydrated, setHydrated] = useState(false);
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(STORE_KEY);
-      if (raw) {
-        const s = JSON.parse(raw) as Partial<PersistShape>;
-        if (Array.isArray(s.corridors)) {
-          corridorsRef.current = s.corridors;
-          setCorridors(s.corridors);
-        }
-        if (s.draft) setDraft(s.draft);
-        if (typeof s.offerAccepted === "boolean") setOfferAccepted(s.offerAccepted);
-        if (typeof s.prevScore === "number") setPrevScore(s.prevScore);
-      }
-    } catch {
-      // corrupt/unavailable storage → fall through to seed
-    }
-    setHydrated(true);
+  const isSample = isSampleId(accountId);
+  const isAuthenticated = !!accountId;
+  const isOnboarded = !!business?.name;
+
+  const applyRecord = useCallback((rec: AccountRecord) => {
+    setBusiness(rec.business);
+    setSuppliers(rec.suppliers);
+    setCorridors(rec.corridors);
+    corridorsRef.current = rec.corridors;
+    setOfferAccepted(rec.offerAccepted);
+    setPrevScore(rec.prevScore);
   }, []);
 
+  // hydrate the active session once, post-mount (avoids SSR mismatch)
   useEffect(() => {
-    if (!hydrated) return;
-    try {
-      const payload: PersistShape = { corridors, draft, offerAccepted, prevScore };
-      sessionStorage.setItem(STORE_KEY, JSON.stringify(payload));
-    } catch {
-      // storage full/blocked → demo still runs from in-memory state
+    const id = loadSession();
+    if (id) {
+      const rec = isSampleId(id) ? loadSampleAccount(now) : loadAccount(id);
+      if (rec) {
+        setAccountId(id);
+        applyRecord(rec);
+      } else {
+        saveSession(null);
+      }
     }
-  }, [hydrated, corridors, draft, offerAccepted, prevScore]);
+    setHydrated(true);
+  }, [now, applyRecord]);
+
+  // persist the active account whenever it changes
+  useEffect(() => {
+    if (!hydrated || !accountId || !business) return;
+    saveAccount({ business, suppliers, corridors, offerAccepted, prevScore });
+  }, [hydrated, accountId, business, suppliers, corridors, offerAccepted, prevScore]);
 
   const score = useMemo(() => scoreCorridors(corridors, now), [corridors, now]);
   const offerAed = useMemo(() => advanceOffer(score), [score]);
@@ -134,86 +175,222 @@ export function CorridorProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const send = useCallback(
-    (c: Corridor) => {
-      setPrevScore(scoreCorridors(corridorsRef.current, now).score);
+  // ---- account actions ----
+
+  const signIn = useCallback(
+    (email: string) => {
+      const existingId = findAccountByEmail(email);
+      if (existingId) {
+        const rec = loadAccount(existingId);
+        if (rec) {
+          setAccountId(existingId);
+          applyRecord(rec);
+          saveSession(existingId);
+          return { onboarded: !!rec.business.name };
+        }
+      }
+      const rec = createAccount(email, now);
+      setAccountId(rec.business.id);
+      applyRecord(rec);
+      saveSession(rec.business.id);
+      saveAccount(rec);
+      return { onboarded: false };
+    },
+    [now, applyRecord],
+  );
+
+  const saveBusiness = useCallback(
+    (b: { name: string; city: string; country: string }) => {
+      setBusiness((prev) => (prev ? { ...prev, ...b } : prev));
+    },
+    [],
+  );
+
+  const addSupplier = useCallback(
+    (s: { name: string; city: string; country: string }) => {
+      const supplier: Supplier = { id: newSupplierId(), ...s };
+      setSuppliers((prev) => [...prev, supplier]);
+      return supplier;
+    },
+    [],
+  );
+
+  const connectWallet = useCallback((address?: string) => {
+    setBusiness((prev) =>
+      prev ? { ...prev, walletAddress: address || walletStub() } : prev,
+    );
+  }, []);
+
+  const signOut = useCallback(() => {
+    saveSession(null);
+    setAccountId(null);
+    setBusiness(null);
+    setSuppliers([]);
+    setCorridors([]);
+    corridorsRef.current = [];
+    setOfferAccepted(false);
+    setPrevScore(0);
+  }, []);
+
+  const enterSample = useCallback(() => {
+    clearSampleAccount();
+    const rec = loadSampleAccount(now);
+    setAccountId(SAMPLE_ACCOUNT_ID);
+    applyRecord(rec);
+    saveSession(SAMPLE_ACCOUNT_ID);
+  }, [now, applyRecord]);
+
+  // ---- corridor actions ----
+
+  const sendPayment = useCallback(
+    (input: {
+      supplierId: string;
+      goods: string;
+      amountAed: number;
+      mode: SettlementMode;
+    }) => {
+      const supplier = suppliers.find((s) => s.id === input.supplierId);
+      if (!supplier || input.amountAed <= 0) return null;
+
       const t = Date.now();
-      const settledImmediately = c.mode === "open";
-      // optimistic: show state instantly, patch the real tx hash when it lands
-      const next: Corridor = settledImmediately
-        ? { ...c, status: "settled", settledAt: t }
-        : { ...c, status: "locked" };
+      const settledImmediately = input.mode === "open";
+      const c: Corridor = {
+        id: `cor_${t}`,
+        ref: nextRef(corridorsRef.current),
+        supplier,
+        goods: input.goods,
+        amountAed: input.amountAed,
+        amountUsdc: makeCorridorUsdc(input.amountAed),
+        mode: input.mode,
+        status: settledImmediately ? "settled" : "locked",
+        settledAt: settledImmediately ? t : undefined,
+        proof:
+          input.mode === "prooflock"
+            ? { status: "awaiting", label: "Bill of lading — Jebel Ali inbound" }
+            : undefined,
+        createdAt: t,
+        txState: "pending",
+      };
+
+      setPrevScore(scoreCorridors(corridorsRef.current, now).score);
       setCorridors((prev) => {
-        const updated = [...prev, next];
+        const updated = [...prev, c];
         corridorsRef.current = updated;
         return updated;
       });
       postChain(settledImmediately ? "pay" : "lock", c.ref, c.amountUsdc).then(
-        ({ txHash, explorerUrl }) => patch(c.id, { txHash, explorerUrl }),
+        ({ txHash, explorerUrl }) =>
+          patch(c.id, {
+            txHash,
+            explorerUrl,
+            txState: txHash ? "confirmed" : "failed",
+          }),
       );
+      return c;
     },
-    [now, patch],
+    [suppliers, now, patch],
   );
 
   const attest = useCallback(
     (id: string) => {
       const target = corridorsRef.current.find((c) => c.id === id);
+      if (!target) return;
       setPrevScore(scoreCorridors(corridorsRef.current, now).score);
-      const t = Date.now();
       patch(id, {
         status: "settled",
-        settledAt: t,
+        settledAt: Date.now(),
         txHash: undefined,
         explorerUrl: undefined,
-        proof: target?.proof
+        txState: "pending",
+        proof: target.proof
           ? { ...target.proof, status: "attested", attestedBy: "Gulf Inspectorate" }
           : undefined,
       });
-      if (target) {
-        postChain("attest", target.ref, target.amountUsdc).then(
-          ({ txHash, explorerUrl }) => patch(id, { txHash, explorerUrl }),
-        );
-      }
+      postChain("attest", target.ref, target.amountUsdc).then(
+        ({ txHash, explorerUrl }) =>
+          patch(id, { txHash, explorerUrl, txState: txHash ? "confirmed" : "failed" }),
+      );
     },
     [now, patch],
   );
 
+  const refund = useCallback(
+    (id: string) => {
+      const target = corridorsRef.current.find((c) => c.id === id);
+      if (!target) return;
+      setPrevScore(scoreCorridors(corridorsRef.current, now).score);
+      patch(id, {
+        status: "refunded",
+        txHash: undefined,
+        explorerUrl: undefined,
+        txState: "pending",
+        proof: target.proof ? { ...target.proof, status: "failed" } : undefined,
+      });
+      postChain("refund", target.ref, target.amountUsdc).then(
+        ({ txHash, explorerUrl }) =>
+          patch(id, { txHash, explorerUrl, txState: txHash ? "confirmed" : "failed" }),
+      );
+    },
+    [now, patch],
+  );
+
+  const retry = useCallback(
+    (id: string) => {
+      const c = corridorsRef.current.find((x) => x.id === id);
+      if (!c) return;
+      const action: ChainAction =
+        c.status === "refunded"
+          ? "refund"
+          : c.status === "locked"
+            ? "lock"
+            : c.mode === "open"
+              ? "pay"
+              : "attest";
+      patch(id, { txState: "pending" });
+      postChain(action, c.ref, c.amountUsdc).then(({ txHash, explorerUrl }) =>
+        patch(id, { txHash, explorerUrl, txState: txHash ? "confirmed" : "failed" }),
+      );
+    },
+    [patch],
+  );
+
   const acceptOffer = useCallback(() => setOfferAccepted(true), []);
 
-  const reset = useCallback(() => {
-    const init = initialCorridors(now);
-    corridorsRef.current = init;
-    setCorridors(init);
-    setDraft(demoDraft(now));
-    setPrevScore(scoreCorridors(init, now).score);
-    setOfferAccepted(false);
-    try {
-      sessionStorage.removeItem(STORE_KEY);
-    } catch {
-      // ignore — the persist effect will rewrite seed state on next tick
-    }
-  }, [now]);
-
-  const value: CorridorState = {
-    importer: IMPORTER,
+  const value: WorkspaceState = {
+    hydrated,
+    business,
+    suppliers,
     financier: FINANCIER,
+    isSample,
+    isAuthenticated,
+    isOnboarded,
+    signIn,
+    saveBusiness,
+    addSupplier,
+    connectWallet,
+    signOut,
+    enterSample,
     corridors,
     score,
     prevScore,
     offerAed,
     offerAccepted,
-    draft,
-    send,
+    sendPayment,
     attest,
+    refund,
+    retry,
     acceptOffer,
-    reset,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
-export function useCorridor(): CorridorState {
+export function useWorkspace(): WorkspaceState {
   const v = useContext(Ctx);
-  if (!v) throw new Error("useCorridor must be used within CorridorProvider");
+  if (!v) throw new Error("useWorkspace must be used within CorridorProvider");
   return v;
 }
+
+// Surface-facing aliases — same context, named for what each surface needs.
+export const useAccount = useWorkspace;
+export const useCorridor = useWorkspace;

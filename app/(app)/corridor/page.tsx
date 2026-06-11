@@ -12,7 +12,8 @@ import {
 } from "@/lib/corridor";
 
 export default function CorridorPage() {
-  const { corridors, score, prevScore, attest, offerAed } = useCorridor();
+  const { corridors, score, prevScore, attest, refund, retry, offerAed } =
+    useCorridor();
   const crossedNow = prevScore < ELIGIBLE_THRESHOLD && score.eligible;
 
   const ledger = [...corridors].sort(
@@ -24,9 +25,7 @@ export default function CorridorPage() {
       {/* score */}
       <section>
         <p className="text-sm text-ink-3">Corridor Record</p>
-        <h1 className="font-display mt-1 text-3xl tracking-tight">
-          Corridor Score
-        </h1>
+        <h1 className="font-display mt-1 text-3xl tracking-tight">Corridor Score</h1>
         <p className="mt-2 text-ink-2">
           Built only from settled corridors. This is the number a financier
           underwrites against.
@@ -45,7 +44,6 @@ export default function CorridorPage() {
             <TierPill tier={score.tier} />
           </div>
 
-          {/* threshold track */}
           <div className="mt-6">
             <div className="relative h-2 rounded-full bg-surface-sunk">
               <div
@@ -59,13 +57,10 @@ export default function CorridorPage() {
             </div>
             <div className="mt-1.5 flex justify-between text-xs text-ink-faint">
               <span>Establishing</span>
-              <span style={{ marginLeft: "auto" }}>
-                Eligible at {ELIGIBLE_THRESHOLD}
-              </span>
+              <span style={{ marginLeft: "auto" }}>Eligible at {ELIGIBLE_THRESHOLD}</span>
             </div>
           </div>
 
-          {/* factor derivation */}
           <div className="mt-6 space-y-3 border-t border-line pt-5">
             {score.factors.map((f) => (
               <FactorRow key={f.key} f={f} />
@@ -79,9 +74,7 @@ export default function CorridorPage() {
             className="rise mt-4 flex items-center justify-between gap-3 rounded-[var(--radius-card)] border border-brass/40 bg-brass-tint px-5 py-4"
           >
             <div>
-              <p className="font-medium text-brass-deep">
-                Working capital unlocked
-              </p>
+              <p className="font-medium text-brass-deep">Working capital unlocked</p>
               <p className="text-sm text-ink-3">
                 {aed(offerAed)} available against this corridor.
               </p>
@@ -101,12 +94,41 @@ export default function CorridorPage() {
             {aed(score.trailingValueAed)} settled
           </span>
         </div>
-        <div className="space-y-3">
-          {ledger.map((c) => (
-            <LedgerRow key={c.id} c={c} onAttest={() => attest(c.id)} />
-          ))}
-        </div>
+
+        {ledger.length === 0 ? (
+          <EmptyLedger />
+        ) : (
+          <div className="space-y-3">
+            {ledger.map((c) => (
+              <LedgerRow
+                key={c.id}
+                c={c}
+                onAttest={() => attest(c.id)}
+                onRefund={() => refund(c.id)}
+                onRetry={() => retry(c.id)}
+              />
+            ))}
+          </div>
+        )}
       </section>
+    </div>
+  );
+}
+
+function EmptyLedger() {
+  return (
+    <div className="rounded-[var(--radius-card)] border border-dashed border-line-strong bg-surface p-8 text-center">
+      <p className="font-medium">No corridors yet</p>
+      <p className="mx-auto mt-1 max-w-xs text-sm text-ink-3">
+        Pay your first supplier to start building a Corridor Score. Each settled
+        payment lifts the number a financier underwrites against.
+      </p>
+      <Link
+        href="/send"
+        className="mt-5 inline-block rounded-full bg-teal px-5 py-2.5 text-sm font-medium text-white"
+      >
+        Make your first payment →
+      </Link>
     </div>
   );
 }
@@ -129,9 +151,7 @@ function FactorRow({ f }: { f: ScoreFactor }) {
             style={{ width: `${pct}%` }}
           />
         </div>
-        <span className="w-40 shrink-0 text-right text-xs text-ink-faint">
-          {f.detail}
-        </span>
+        <span className="w-40 shrink-0 text-right text-xs text-ink-faint">{f.detail}</span>
       </div>
     </div>
   );
@@ -144,23 +164,30 @@ function TierPill({ tier }: { tier: string }) {
     preferred: "bg-brass-tint text-brass-deep",
   };
   return (
-    <span
-      className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${map[tier]}`}
-    >
+    <span className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${map[tier]}`}>
       {tier}
     </span>
   );
 }
 
-function LedgerRow({ c, onAttest }: { c: Corridor; onAttest: () => void }) {
+function LedgerRow({
+  c,
+  onAttest,
+  onRefund,
+  onRetry,
+}: {
+  c: Corridor;
+  onAttest: () => void;
+  onRefund: () => void;
+  onRetry: () => void;
+}) {
+  const failed = c.txState === "failed";
   return (
     <div className="rounded-[var(--radius-card)] border border-line bg-surface p-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="tnum font-mono text-xs text-ink-faint">
-              {c.ref}
-            </span>
+            <span className="tnum font-mono text-xs text-ink-faint">{c.ref}</span>
             <StatusPill c={c} />
           </div>
           <p className="mt-1 font-medium">{c.supplier.name}</p>
@@ -168,56 +195,75 @@ function LedgerRow({ c, onAttest }: { c: Corridor; onAttest: () => void }) {
         </div>
         <div className="text-right">
           <p className="font-display tnum text-xl">{aed(c.amountAed)}</p>
-          <p className="tnum font-mono text-xs text-ink-faint">
-            {usdcLabel(c.amountUsdc)}
-          </p>
+          <p className="tnum font-mono text-xs text-ink-faint">{usdcLabel(c.amountUsdc)}</p>
         </div>
       </div>
 
-      {(c.proof || c.txHash) && (
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
-          <p className="text-xs text-ink-3">
-            {c.proof ? (
-              <>
-                <span className="text-ink-faint">Proof · </span>
-                {c.proof.label}
-                {c.proof.attestedBy ? ` · ${c.proof.attestedBy}` : ""}
-              </>
-            ) : (
-              <span className="text-ink-faint">Open settlement</span>
-            )}
-          </p>
-          {c.status === "locked" ? (
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-3">
+        <p className="text-xs text-ink-3">
+          {c.proof ? (
+            <>
+              <span className="text-ink-faint">Proof · </span>
+              {c.proof.label}
+              {c.proof.attestedBy ? ` · ${c.proof.attestedBy}` : ""}
+            </>
+          ) : (
+            <span className="text-ink-faint">Open settlement</span>
+          )}
+        </p>
+
+        {failed ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="text-xs font-medium text-danger">Settlement failed</span>
+            <button
+              onClick={onRetry}
+              className="rounded-full border border-danger/30 bg-danger-tint px-3 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger-tint/70"
+            >
+              Retry
+            </button>
+          </div>
+        ) : c.status === "locked" ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              onClick={onRefund}
+              className="rounded-full border border-line px-3 py-1.5 text-xs font-medium text-ink-3 transition-colors hover:border-line-strong hover:text-ink"
+            >
+              Dispute &amp; refund
+            </button>
             <button
               onClick={onAttest}
-              className="shrink-0 rounded-full bg-brass px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-brass-deep"
+              className="rounded-full bg-brass px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-brass-deep"
             >
               Attest shipment proof
             </button>
-          ) : (
-            <TxLink txHash={c.txHash} explorerUrl={c.explorerUrl} />
-          )}
-        </div>
-      )}
+          </div>
+        ) : (
+          <TxLink txHash={c.txHash} explorerUrl={c.explorerUrl} txState={c.txState} />
+        )}
+      </div>
     </div>
   );
 }
 
 function shortHash(h: string): string {
-  if (h.includes("…")) return h; // already short (simulated)
+  if (h.includes("…")) return h;
   return h.length > 14 ? `${h.slice(0, 6)}…${h.slice(-4)}` : h;
 }
 
 function TxLink({
   txHash,
   explorerUrl,
+  txState,
 }: {
   txHash?: string;
   explorerUrl?: string;
+  txState?: string;
 }) {
   if (!txHash) {
     return (
-      <span className="shrink-0 text-xs text-ink-faint">confirming…</span>
+      <span className="shrink-0 text-xs text-ink-faint">
+        {txState === "pending" ? "confirming…" : "—"}
+      </span>
     );
   }
   if (explorerUrl) {
@@ -233,9 +279,7 @@ function TxLink({
     );
   }
   return (
-    <span className="tnum shrink-0 font-mono text-xs text-teal-deep">
-      {shortHash(txHash)}
-    </span>
+    <span className="tnum shrink-0 font-mono text-xs text-teal-deep">{shortHash(txHash)}</span>
   );
 }
 

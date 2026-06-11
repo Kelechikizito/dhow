@@ -95,9 +95,16 @@ const ESCROW_ABI = [
     ],
     outputs: [],
   },
+  {
+    type: "function",
+    name: "refund",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "corridorId", type: "bytes32" }],
+    outputs: [],
+  },
 ] as const;
 
-export type ChainAction = "pay" | "lock" | "attest";
+export type ChainAction = "pay" | "lock" | "attest" | "refund";
 
 function clients(cfg: ChainConfig) {
   const chain = defineChain({
@@ -141,6 +148,15 @@ export async function runChainAction(
       abi: ESCROW_ABI,
       functionName: "lock",
       args: [cid, cfg.supplier, parseUnits(String(amountUsdc), 6), deadline],
+    });
+  } else if (action === "refund") {
+    // On-chain refund reverts until the lock's deadline passes ("not expired").
+    // Models a timed-out / disputed corridor returning funds to the payer.
+    hash = await wallet.writeContract({
+      address: cfg.escrow,
+      abi: ESCROW_ABI,
+      functionName: "refund",
+      args: [cid],
     });
   } else {
     hash = await wallet.writeContract({

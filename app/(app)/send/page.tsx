@@ -1,33 +1,49 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useCorridor } from "@/components/CorridorProvider";
 import {
   aed,
   AED_PER_USD,
+  makeCorridorUsdc,
   SettlementMode,
   usdcLabel,
 } from "@/lib/corridor";
 
 export default function SendPage() {
   const router = useRouter();
-  const { draft, corridors, send } = useCorridor();
-  const [mode, setMode] = useState<SettlementMode>(draft.mode);
+  const { business, suppliers, addSupplier, sendPayment } = useCorridor();
 
-  const alreadySent = corridors.some((c) => c.id === draft.id);
+  const [supplierId, setSupplierId] = useState<string>(suppliers[0]?.id ?? "");
+  const [goods, setGoods] = useState("");
+  const [amount, setAmount] = useState("");
+  const [mode, setMode] = useState<SettlementMode>("prooflock");
+  const [addingSupplier, setAddingSupplier] = useState(suppliers.length === 0);
+  const [newSup, setNewSup] = useState({ name: "", city: "", country: "" });
+
+  const amountAed = Number(amount.replace(/[^0-9.]/g, "")) || 0;
+  const amountUsdc = amountAed > 0 ? makeCorridorUsdc(amountAed) : 0;
+  const canSend = !!supplierId && amountAed > 0 && goods.trim().length > 0;
+
+  function handleAddSupplier() {
+    if (!newSup.name.trim() || !newSup.city.trim() || !newSup.country.trim()) return;
+    const s = addSupplier(newSup);
+    setSupplierId(s.id);
+    setNewSup({ name: "", city: "", country: "" });
+    setAddingSupplier(false);
+  }
 
   function handleSend() {
-    send({ ...draft, mode });
-    router.push("/corridor");
+    const c = sendPayment({ supplierId, goods, amountAed, mode });
+    if (c) router.push("/corridor");
   }
 
   return (
     <div className="mx-auto max-w-2xl">
-      <p className="text-sm text-ink-3">Send</p>
-      <h1 className="font-display mt-1 text-3xl tracking-tight">
-        Pay your supplier
-      </h1>
+      <p className="text-sm text-ink-3">New payment</p>
+      <h1 className="font-display mt-1 text-3xl tracking-tight">Pay your supplier</h1>
       <p className="mt-2 max-w-lg text-ink-2">
         Settle cross-border in stablecoin on Polygon. Minutes, not days. The
         record writes itself.
@@ -35,29 +51,103 @@ export default function SendPage() {
 
       <div className="mt-8 overflow-hidden rounded-[var(--radius-card)] border border-line bg-surface">
         {/* counterparties */}
-        <div className="flex items-center justify-between gap-4 border-b border-line px-6 py-5">
-          <Party label="From" name="Al Noor Trading" sub="Dubai, UAE" />
-          <Arrow />
-          <Party
-            label="To"
-            name={draft.supplier.name}
-            sub={`${draft.supplier.city}, ${draft.supplier.country}`}
-            alignRight
-          />
+        <div className="border-b border-line px-6 py-5">
+          <div className="flex items-center justify-between gap-4">
+            <Party label="From" name={business?.name ?? "Your business"} sub={`${business?.city ?? ""}${business?.city ? ", " : ""}${business?.country ?? ""}`} />
+            <Arrow />
+            <div className="text-right">
+              <p className="text-xs uppercase tracking-wide text-ink-faint">To</p>
+              {addingSupplier ? (
+                <p className="mt-0.5 text-sm text-ink-3">New supplier</p>
+              ) : (
+                <select
+                  value={supplierId}
+                  onChange={(e) => {
+                    if (e.target.value === "__add") setAddingSupplier(true);
+                    else setSupplierId(e.target.value);
+                  }}
+                  className="mt-0.5 rounded-[var(--radius-sm)] border border-line bg-surface px-2 py-1 text-right text-sm font-medium text-ink outline-none focus:border-teal"
+                >
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} · {s.city}
+                    </option>
+                  ))}
+                  <option value="__add">+ Add supplier…</option>
+                </select>
+              )}
+            </div>
+          </div>
+
+          {addingSupplier && (
+            <div className="mt-4 rounded-[var(--radius-sm)] border border-line bg-surface-sunk p-4">
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input
+                  placeholder="Supplier name"
+                  value={newSup.name}
+                  onChange={(e) => setNewSup({ ...newSup, name: e.target.value })}
+                  className="rounded-[var(--radius-sm)] border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-teal sm:col-span-3"
+                />
+                <input
+                  placeholder="City"
+                  value={newSup.city}
+                  onChange={(e) => setNewSup({ ...newSup, city: e.target.value })}
+                  className="rounded-[var(--radius-sm)] border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-teal"
+                />
+                <input
+                  placeholder="Country"
+                  value={newSup.country}
+                  onChange={(e) => setNewSup({ ...newSup, country: e.target.value })}
+                  className="rounded-[var(--radius-sm)] border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-teal"
+                />
+                <button
+                  onClick={handleAddSupplier}
+                  className="rounded-full bg-ink px-4 py-2 text-sm font-medium text-paper"
+                >
+                  Save supplier
+                </button>
+              </div>
+              {suppliers.length > 0 && (
+                <button
+                  onClick={() => setAddingSupplier(false)}
+                  className="mt-2 text-xs text-ink-faint hover:text-ink-3"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* amount */}
+        {/* goods + amount */}
         <div className="border-b border-line px-6 py-7">
-          <p className="text-sm text-ink-3">{draft.goods}</p>
-          <div className="mt-2 flex items-baseline gap-3">
-            <span className="font-display tnum text-5xl tracking-tight">
-              {aed(draft.amountAed)}
-            </span>
-          </div>
-          <div className="mt-2 flex items-center gap-2 text-sm text-ink-3">
-            <span className="tnum font-mono text-teal-deep">
-              {usdcLabel(draft.amountUsdc)}
-            </span>
+          <label className="block">
+            <span className="text-sm text-ink-3">What are you paying for?</span>
+            <input
+              name="goods"
+              value={goods}
+              onChange={(e) => setGoods(e.target.value)}
+              placeholder="e.g. Auto components — 2 × 40ft"
+              className="mt-1.5 w-full rounded-[var(--radius-sm)] border border-line bg-surface px-3.5 py-2.5 text-ink outline-none placeholder:text-ink-faint focus:border-teal focus:ring-1 focus:ring-teal"
+            />
+          </label>
+
+          <label className="mt-5 block">
+            <span className="text-sm text-ink-3">Amount (AED)</span>
+            <div className="mt-1.5 flex items-baseline gap-2 rounded-[var(--radius-sm)] border border-line bg-surface px-3.5 py-2 focus-within:border-teal focus-within:ring-1 focus-within:ring-teal">
+              <span className="font-display text-2xl text-ink-faint">AED</span>
+              <input
+                inputMode="decimal"
+                name="amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="412,000"
+                className="tnum w-full bg-transparent font-display text-3xl tracking-tight outline-none placeholder:text-ink-faint"
+              />
+            </div>
+          </label>
+          <div className="mt-2 flex items-center gap-2 text-sm">
+            <span className="tnum font-mono text-teal-deep">{usdcLabel(amountUsdc)}</span>
             <span className="text-ink-faint">
               · settles in USDC at peg {AED_PER_USD.toFixed(4)} AED/USD
             </span>
@@ -90,56 +180,33 @@ export default function SendPage() {
               ? "Funds lock in a Polygon escrow and release to the supplier the moment the bill of lading is attested."
               : "A single on-chain transfer settles directly to the supplier."}
           </p>
-          {alreadySent ? (
-            <button
-              onClick={() => router.push("/corridor")}
-              className="rounded-full bg-ink px-5 py-2.5 text-sm font-medium text-paper"
-            >
-              View in Corridor Record →
-            </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              className="rounded-full bg-teal px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-deep"
-            >
-              {mode === "prooflock" ? "Lock & send" : "Send payment"}
-            </button>
-          )}
+          <button
+            onClick={handleSend}
+            disabled={!canSend}
+            className="shrink-0 rounded-full bg-teal px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-deep disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {mode === "prooflock" ? "Lock & send" : "Send payment"}
+          </button>
         </div>
       </div>
 
-      {/* before / after */}
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
-        <Compare
-          tone="muted"
-          head="Correspondent banking"
-          big="3–5 days"
-          sub=">3% on a quarter of corridors, opaque FX"
-        />
-        <Compare
-          tone="teal"
-          head="On Dhow"
-          big="Minutes"
-          sub="~$0.002 settlement on Polygon, FX shown up front"
-        />
+        <Compare tone="muted" head="Correspondent banking" big="3–5 days" sub=">3% on a quarter of corridors, opaque FX" />
+        <Compare tone="teal" head="On Dhow" big="Minutes" sub="~$0.002 settlement on Polygon, FX shown up front" />
       </div>
+
+      <p className="mt-6 text-center text-sm text-ink-faint">
+        <Link href="/corridor" className="underline underline-offset-2 hover:text-ink-3">
+          View your Corridor Record
+        </Link>
+      </p>
     </div>
   );
 }
 
-function Party({
-  label,
-  name,
-  sub,
-  alignRight,
-}: {
-  label: string;
-  name: string;
-  sub: string;
-  alignRight?: boolean;
-}) {
+function Party({ label, name, sub }: { label: string; name: string; sub: string }) {
   return (
-    <div className={alignRight ? "text-right" : ""}>
+    <div>
       <p className="text-xs uppercase tracking-wide text-ink-faint">{label}</p>
       <p className="mt-0.5 font-medium">{name}</p>
       <p className="text-sm text-ink-3">{sub}</p>
@@ -150,13 +217,7 @@ function Party({
 function Arrow() {
   return (
     <svg viewBox="0 0 24 24" className="h-5 w-5 shrink-0 text-ink-faint" fill="none">
-      <path
-        d="M4 12h15m0 0-5-5m5 5-5 5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path d="M4 12h15m0 0-5-5m5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -210,17 +271,11 @@ function Compare({
   return (
     <div
       className={`rounded-[var(--radius-card)] border px-5 py-4 ${
-        tone === "teal"
-          ? "border-teal/30 bg-teal-tint/50"
-          : "border-line bg-surface"
+        tone === "teal" ? "border-teal/30 bg-teal-tint/50" : "border-line bg-surface"
       }`}
     >
       <p className="text-xs uppercase tracking-wide text-ink-faint">{head}</p>
-      <p
-        className={`font-display mt-1 text-2xl ${
-          tone === "teal" ? "text-teal-deep" : "text-ink"
-        }`}
-      >
+      <p className={`font-display mt-1 text-2xl ${tone === "teal" ? "text-teal-deep" : "text-ink"}`}>
         {big}
       </p>
       <p className="mt-0.5 text-sm text-ink-3">{sub}</p>
